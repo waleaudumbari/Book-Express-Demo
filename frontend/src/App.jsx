@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import {
+  ArrowUpDown,
   BookOpen,
   Check,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
   LoaderCircle,
+  List,
   Pencil,
   Plus,
   RefreshCw,
@@ -14,8 +14,11 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import DataTable from 'react-data-table-component';
+import { Link } from 'react-router-dom';
+import DataTablePaginationAdapter from './components/DataTablePaginationAdapter';
+import { createBook, deleteBook, getBooks, updateBook } from './services/booksApi';
 
-const API_URL = '/api/v1/books';
 const PAGE_SIZE = 10;
 const blankBook = { name: '', category: '', price: '', author: '', image: '' };
 const defaultPagination = {
@@ -24,18 +27,57 @@ const defaultPagination = {
   totalItems: 0,
   totalPages: 0,
 };
-
-function getErrorMessage(payload, fallback) {
-  return payload?.error?.message || payload?.message || fallback;
-}
-
-async function readResponse(response) {
-  try {
-    return await response.json();
-  } catch {
-    return {};
-  }
-}
+const dataTableStyles = {
+  table: { style: { minWidth: '660px', backgroundColor: 'transparent' } },
+  responsiveWrapper: { style: { overflowX: 'auto' } },
+  headRow: {
+    style: {
+      minHeight: '39px',
+      borderBottom: '1px solid #e8e6dc',
+      backgroundColor: '#faf9f4',
+    },
+  },
+  headCells: {
+    style: {
+      paddingLeft: '13px',
+      paddingRight: '13px',
+      color: '#858a80',
+      fontSize: '9px',
+      fontWeight: '700',
+      letterSpacing: '.1em',
+    },
+  },
+  rows: {
+    style: { minHeight: '79px', backgroundColor: '#fffefa' },
+    highlightOnHoverStyle: { backgroundColor: '#fdfcf7' },
+  },
+  cells: {
+    style: {
+      padding: '9px 13px',
+      color: '#4a5049',
+      fontSize: '12px',
+    },
+  },
+  pagination: {
+    style: {
+      minHeight: '54px',
+      padding: '0 12px',
+      borderTop: '1px solid #e8e6dc',
+      backgroundColor: '#fffefa',
+      color: '#878b82',
+      fontSize: '10px',
+    },
+    pageButtonsStyle: {
+      height: '30px',
+      width: '30px',
+      padding: '5px',
+      borderRadius: '5px',
+      color: '#687068',
+      fill: '#687068',
+    },
+  },
+  noData: { style: { padding: '0', color: '#858a80' } },
+};
 
 function BookCover({ book, index }) {
   return (
@@ -61,12 +103,13 @@ function App() {
   const [books, setBooks] = useState([]);
   const [pagination, setPagination] = useState(defaultPagination);
   const [page, setPage] = useState(1);
+  const [paginationReset, setPaginationReset] = useState(false);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [author, setAuthor] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
-  const [sort, setSort] = useState('-createdAt');
+  const [sort, setSort] = useState('name');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [apiOnline, setApiOnline] = useState(null);
@@ -81,36 +124,28 @@ function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    const params = new URLSearchParams({
-      page: String(page),
-      limit: String(PAGE_SIZE),
-      sort,
-    });
-
-    if (search.trim()) params.set('search', search.trim());
-    if (category.trim()) params.set('category', category.trim());
-    if (author.trim()) params.set('author', author.trim());
-    if (minPrice !== '') params.set('minPrice', minPrice);
-    if (maxPrice !== '') params.set('maxPrice', maxPrice);
 
     const timeoutId = window.setTimeout(async () => {
       setLoading(true);
       setLoadError('');
 
       try {
-        const response = await fetch(`${API_URL}?${params}`, {
+        const payload = await getBooks({
+          page,
+          limit: PAGE_SIZE,
+          sort,
+          search: search.trim(),
+          category: category.trim(),
+          author: author.trim(),
+          minPrice,
+          maxPrice,
           signal: controller.signal,
         });
-        const payload = await readResponse(response);
-
-        if (!response.ok) {
-          throw new Error(getErrorMessage(payload, `Book API request failed (${response.status}).`));
-        }
 
         const nextBooks = Array.isArray(payload.data) ? payload.data : [];
         if (nextBooks.length === 0 && page > 1) {
           setBooks([]);
-          setPage((currentPage) => Math.max(1, currentPage - 1));
+          changePage(Math.max(1, page - 1));
           return;
         }
 
@@ -149,12 +184,13 @@ function App() {
   }, [dialog, saving, deleting]);
 
   const activeFilterCount = [category, author, minPrice, maxPrice].filter(Boolean).length;
-  const totalPages = Math.max(pagination.totalPages || 0, 1);
-  const firstResult = pagination.totalItems === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const lastResult = Math.min(page * PAGE_SIZE, pagination.totalItems || 0);
+  function changePage(nextPage) {
+    setPage(nextPage);
+    setPaginationReset((currentValue) => !currentValue);
+  }
 
   function resetPage() {
-    setPage(1);
+    changePage(1);
   }
 
   function openCreateDialog() {
@@ -181,7 +217,7 @@ function App() {
     setMinPrice('');
     setMaxPrice('');
     setSearch('');
-    setSort('-createdAt');
+    setSort('name');
     setPage(1);
   }
 
@@ -200,23 +236,12 @@ function App() {
 
     try {
       const isEdit = dialog.type === 'edit';
-      const response = await fetch(
-        isEdit ? `${API_URL}/${dialog.book._id}` : API_URL,
-        {
-          method: isEdit ? 'PATCH' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }
-      );
-      const result = response.status === 204 ? {} : await readResponse(response);
-
-      if (!response.ok) {
-        throw new Error(getErrorMessage(result, `Could not save this book (${response.status}).`));
-      }
+      if (isEdit) await updateBook(dialog.book._id, payload);
+      else await createBook(payload);
 
       setDialog(null);
       setToast(isEdit ? 'Book details updated' : 'Book added to the collection');
-      setPage(1);
+      changePage(1);
       setReloadKey((currentKey) => currentKey + 1);
     } catch (error) {
       setFormError(error.message || 'Could not save this book.');
@@ -231,14 +256,7 @@ function App() {
     setFormError('');
 
     try {
-      const response = await fetch(`${API_URL}/${dialog.book._id}`, {
-        method: 'DELETE',
-      });
-
-      if (!response.ok) {
-        const result = await readResponse(response);
-        throw new Error(getErrorMessage(result, `Could not delete this book (${response.status}).`));
-      }
+      await deleteBook(dialog.book._id);
 
       setDialog(null);
       setToast('Book removed from the collection');
@@ -250,21 +268,105 @@ function App() {
     }
   }
 
+  const columns = [
+    {
+      id: 'name',
+      name: 'BOOK',
+      selector: (book) => book.name,
+      sortField: 'name',
+      sortable: true,
+      minWidth: '250px',
+      cell: (book, rowIndex) => (
+        <div className="book-cell">
+          <BookCover book={book} index={rowIndex} />
+          <div className="book-cell__details">
+            <strong>{book.name}</strong>
+            <span className="book-cell__mobile-author">{book.author}</span>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'author',
+      name: 'AUTHOR',
+      selector: (book) => book.author,
+      sortField: 'author',
+      sortable: true,
+      hide: 'sm',
+      minWidth: '145px',
+    },
+    {
+      id: 'category',
+      name: 'CATEGORY',
+      selector: (book) => book.category,
+      sortField: 'category',
+      sortable: true,
+      minWidth: '125px',
+      cell: (book) => <span className="category-label">{book.category}</span>,
+    },
+    {
+      id: 'price',
+      name: 'PRICE',
+      selector: (book) => Number(book.price),
+      sortField: 'price',
+      sortable: true,
+      minWidth: '100px',
+      cell: (book) => <span className="price-cell">${Number(book.price).toFixed(2)}</span>,
+    },
+    {
+      id: 'actions',
+      name: '',
+      button: true,
+      right: true,
+      width: '90px',
+      ignoreRowClick: true,
+      cell: (book) => (
+        <div className="row-actions">
+          <button
+            className="icon-button"
+            type="button"
+            title={`Edit ${book.name}`}
+            aria-label={`Edit ${book.name}`}
+            onClick={() => openEditDialog(book)}
+          >
+            <Pencil size={15} />
+          </button>
+          <button
+            className="icon-button icon-button--danger"
+            type="button"
+            title={`Delete ${book.name}`}
+            aria-label={`Delete ${book.name}`}
+            onClick={() => {
+              setFormError('');
+              setDialog({ type: 'delete', book });
+            }}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#collection" aria-label="Fieldnotes home">
+        <Link className="brand" to="/" aria-label="Fieldnotes home">
           <span className="brand__mark"><BookOpen size={21} strokeWidth={1.8} /></span>
           <span className="brand__name">fieldnotes<span>.</span></span>
-        </a>
+        </Link>
 
         <div className="sidebar__section-label">LIBRARY</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          <a className="sidebar-nav__item sidebar-nav__item--active" href="#collection">
+          <Link className="sidebar-nav__item sidebar-nav__item--active" to="/">
             <BookOpen size={17} />
             <span>All books</span>
             <span className="sidebar-nav__count">{pagination.totalItems}</span>
-          </a>
+          </Link>
+          <Link className="sidebar-nav__item" to="/books/table">
+            <List size={17} />
+            <span>Simple table</span>
+          </Link>
         </nav>
 
         <div className="sidebar__bottom">
@@ -300,10 +402,16 @@ function App() {
             </div>
             <p className="page-heading__subtitle">Keep every title, author, and detail in its place.</p>
           </div>
-          <button className="btn btn-add-book" type="button" onClick={openCreateDialog}>
-            <Plus size={17} strokeWidth={2.2} />
-            <span>Add a book</span>
-          </button>
+          <div className="page-heading__actions">
+            <Link className="btn btn-view-toggle" to="/books/table" aria-label="Open simple table listing">
+              <List size={16} />
+              <span>Simple table</span>
+            </Link>
+            <button className="btn btn-add-book" type="button" onClick={openCreateDialog}>
+              <Plus size={17} strokeWidth={2.2} />
+              <span>Add a book</span>
+            </button>
+          </div>
         </header>
 
         {loadError && (
@@ -360,25 +468,6 @@ function App() {
             {activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}
           </button>
 
-          <label className="sort-control">
-            <span>Sort</span>
-            <select
-              className="form-select"
-              value={sort}
-              onChange={(event) => {
-                setSort(event.target.value);
-                resetPage();
-              }}
-              aria-label="Sort books"
-            >
-              <option value="-createdAt">Recently added</option>
-              <option value="name">Title: A to Z</option>
-              <option value="-name">Title: Z to A</option>
-              <option value="author">Author: A to Z</option>
-              <option value="price">Price: low to high</option>
-              <option value="-price">Price: high to low</option>
-            </select>
-          </label>
         </section>
 
         {filtersOpen && (
@@ -465,118 +554,54 @@ function App() {
             </button>
           </div>
 
-          <div className="table-responsive">
-            <table className="table book-table align-middle mb-0">
-              <thead>
-                <tr>
-                  <th scope="col">BOOK</th>
-                  <th scope="col">AUTHOR</th>
-                  <th scope="col">CATEGORY</th>
-                  <th scope="col">PRICE</th>
-                  <th scope="col"><span className="visually-hidden">Actions</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && books.length === 0 && (
-                  <tr>
-                    <td className="table-message" colSpan="5">
-                      <LoaderCircle className="spin-icon" size={22} />
-                      <span>Gathering your books...</span>
-                    </td>
-                  </tr>
-                )}
-                {!loading && loadError && books.length === 0 && (
-                  <tr>
-                    <td className="table-message" colSpan="5">
-                      Book list is unavailable until the API reconnects.
-                    </td>
-                  </tr>
-                )}
-                {!loading && !loadError && books.length === 0 && (
-                  <tr>
-                    <td className="table-message table-message--empty" colSpan="5">
-                      <span className="empty-mark"><BookOpen size={23} /></span>
-                      <strong>{search || activeFilterCount ? 'No matching books' : 'Your collection is waiting'}</strong>
-                      <span>{search || activeFilterCount ? 'Adjust the search or filters and try again.' : 'Add a book to begin your inventory.'}</span>
-                      {!(search || activeFilterCount) && (
-                        <button className="btn btn-add-book btn-add-book--small" type="button" onClick={openCreateDialog}>
-                          <Plus size={16} /> Add a book
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )}
-                {books.map((book, index) => (
-                  <tr key={book._id}>
-                    <td>
-                      <div className="book-cell">
-                        <BookCover book={book} index={index} />
-                        <div className="book-cell__details">
-                          <strong>{book.name}</strong>
-                          <span className="book-cell__mobile-author">{book.author}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="author-cell">{book.author}</td>
-                    <td><span className="category-label">{book.category}</span></td>
-                    <td className="price-cell">${Number(book.price).toFixed(2)}</td>
-                    <td>
-                      <div className="row-actions">
-                        <button
-                          className="icon-button"
-                          type="button"
-                          title={`Edit ${book.name}`}
-                          aria-label={`Edit ${book.name}`}
-                          onClick={() => openEditDialog(book)}
-                        >
-                          <Pencil size={15} />
-                        </button>
-                        <button
-                          className="icon-button icon-button--danger"
-                          type="button"
-                          title={`Delete ${book.name}`}
-                          aria-label={`Delete ${book.name}`}
-                          onClick={() => {
-                            setFormError('');
-                            setDialog({ type: 'delete', book });
-                          }}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <footer className="list-footer">
-            <span>Showing <strong>{firstResult}-{lastResult}</strong> of <strong>{pagination.totalItems}</strong></span>
-            <div className="pagination-controls">
-              <span>Page {page} of {totalPages}</span>
-              <button
-                className="icon-button"
-                type="button"
-                title="Previous page"
-                aria-label="Previous page"
-                disabled={page <= 1 || loading}
-                onClick={() => setPage((currentPage) => Math.max(1, currentPage - 1))}
-              >
-                <ChevronLeft size={17} />
-              </button>
-              <button
-                className="icon-button"
-                type="button"
-                title="Next page"
-                aria-label="Next page"
-                disabled={page >= totalPages || loading}
-                onClick={() => setPage((currentPage) => Math.min(totalPages, currentPage + 1))}
-              >
-                <ChevronRight size={17} />
-              </button>
-            </div>
-          </footer>
+          <DataTable
+            className="book-data-table"
+            columns={columns}
+            data={books}
+            keyField="_id"
+            responsive
+            highlightOnHover
+            customStyles={dataTableStyles}
+            noDataComponent={
+              loading ? (
+                <div className="table-message">
+                  <LoaderCircle className="spin-icon" size={22} />
+                  <span>Gathering your books...</span>
+                </div>
+              ) : loadError ? (
+                <div className="table-message">Book list is unavailable until the API reconnects.</div>
+              ) : (
+                <div className="table-message table-message--empty">
+                  <span className="empty-mark"><BookOpen size={23} /></span>
+                  <strong>{search || activeFilterCount ? 'No matching books' : 'Your collection is waiting'}</strong>
+                  <span>{search || activeFilterCount ? 'Adjust the search or filters and try again.' : 'Add a book to begin your inventory.'}</span>
+                  {!(search || activeFilterCount) && (
+                    <button className="btn btn-add-book btn-add-book--small" type="button" onClick={openCreateDialog}>
+                      <Plus size={16} /> Add a book
+                    </button>
+                  )}
+                </div>
+              )
+            }
+            sortServer
+            defaultSortFieldId="name"
+            defaultSortAsc
+            sortIcon={<ArrowUpDown size={13} />}
+            onSort={(column, direction) => {
+              if (!column.sortField) return;
+              setSort(direction === 'desc' ? `-${column.sortField}` : column.sortField);
+              changePage(1);
+            }}
+            pagination
+            paginationServer
+            paginationTotalRows={pagination.totalItems}
+            paginationPerPage={PAGE_SIZE}
+            paginationRowsPerPageOptions={[PAGE_SIZE]}
+            paginationComponent={DataTablePaginationAdapter}
+            paginationDefaultPage={page}
+            paginationResetDefaultPage={paginationReset}
+            onChangePage={changePage}
+          />
         </section>
       </main>
 
