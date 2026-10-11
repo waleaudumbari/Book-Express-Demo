@@ -1,6 +1,7 @@
 const Book = require('../models/book.model');
 
 const bookFields = ['name', 'category', 'price', 'author', 'image'];
+const defaultPageSize = 10;
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -37,7 +38,7 @@ function sendBookNotFound(res) {
 
 async function listBooks(req, res) {
   const page = req.query.page || 1;
-  const limit = req.query.limit || 10;
+  const limit = req.query.limit || defaultPageSize;
   const skip = (page - 1) * limit;
   const filter = {};
 

@@ -5,6 +5,7 @@ const validateRequest = require('../middleware/validate-request');
 
 const router = express.Router();
 const sortableFields = new Set(['name', 'category', 'price', 'author', 'createdAt']);
+const maxPageSize = 10;
 
 const bookIdValidation = [
   param('id').isMongoId().withMessage('id must be a valid MongoDB ObjectId'),
@@ -13,7 +14,7 @@ const bookIdValidation = [
 
 const listQueryValidation = [
   query('page').optional().isInt({ min: 1 }).toInt(),
-  query('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: maxPageSize }).toInt(),
   query('minPrice').optional().isFloat({ min: 0 }).toFloat(),
   query('maxPrice').optional().isFloat({ min: 0 }).toFloat(),
   query('category').optional().trim().notEmpty(),
